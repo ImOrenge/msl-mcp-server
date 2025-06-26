@@ -14,6 +14,10 @@ metadata:
     - msl
     - openai
     - ai-powered
+  annotations:
+    smithery.ai/headless-compatible: "true"
+    smithery.ai/gui-deps: "none"
+    smithery.ai/build-system: "hatchling"
 
 spec:
   # 서버 기본 설정
@@ -22,13 +26,17 @@ spec:
     description: "AI-powered MSL script generation and analysis server"
     version: "1.0.0"
     
-  # 런타임 설정
+  # 런타임 설정 - Headless 호환
   runtime:
     type: "docker"
     image: "msl-mcp-server:latest"
     build:
       context: "."
       dockerfile: "Dockerfile"
+      platform: "linux/amd64"
+    resource_limits:
+      memory: "512Mi"
+      cpu: "0.5"
     
   # 환경변수 설정
   environment:
@@ -46,35 +54,103 @@ spec:
       - name: "MSL_MAX_CONCURRENT_REQUESTS"
         description: "Maximum concurrent requests"
         default: "10"
+      # Headless 환경 설정
+      - name: "DISPLAY"
+        description: "Virtual display for headless environment"
+        default: ":99"
+      - name: "MPLBACKEND"
+        description: "Matplotlib backend for headless mode"
+        default: "Agg"
+      - name: "NO_AT_BRIDGE"
+        description: "Disable accessibility bridge"
+        default: "1"
+
+  # 빌드 설정
+  build:
+    system: "hatchling"
+    python_version: "3.11"
+    build_files:
+      - "pyproject.toml"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".dockerignore"
+    entry_point: "server:main"
+    packages:
+      - "msl"
+      - "tools"
+      - "ai"
+      - "config"
 
   # MCP 도구 정의
   tools:
     - name: "parse_msl"
       description: "Parse and analyze MSL scripts with syntax validation"
       category: "analysis"
+      parameters:
+        - name: "script"
+          type: "string"
+          required: true
+        - name: "mode"
+          type: "string"
+          default: "detailed"
       
     - name: "generate_msl"
       description: "Generate MSL scripts from natural language prompts using AI"
       category: "generation"
       ai_powered: true
+      parameters:
+        - name: "prompt"
+          type: "string"
+          required: true
+        - name: "context"
+          type: "object"
+          required: false
       
     - name: "validate_msl"
       description: "Validate MSL scripts for syntax, performance, and safety"
       category: "validation"
+      parameters:
+        - name: "script"
+          type: "string"
+          required: true
+        - name: "level"
+          type: "string"
+          default: "standard"
       
     - name: "optimize_msl"
       description: "Optimize MSL scripts for better performance and readability"
       category: "optimization"
       ai_powered: true
+      parameters:
+        - name: "script"
+          type: "string"
+          required: true
+        - name: "level"
+          type: "string"
+          default: "standard"
       
     - name: "explain_msl"
       description: "Generate educational explanations for MSL scripts"
       category: "education"
       ai_powered: true
+      parameters:
+        - name: "script"
+          type: "string"
+          required: true
+        - name: "detail_level"
+          type: "string"
+          default: "beginner"
       
     - name: "msl_examples"
       description: "Provide categorized MSL script examples for learning"
       category: "examples"
+      parameters:
+        - name: "category"
+          type: "string"
+          default: "basic"
+        - name: "game_context"
+          type: "string"
+          required: false
 
   # 지원되는 언어
   languages:
@@ -97,11 +173,26 @@ spec:
       description: "Learn MSL syntax through examples and explanations"
       example: "msl_examples(category='combat', game='fps')"
 
+  # 의존성 및 요구사항
+  dependencies:
+    mcp: ">=1.0.0"
+    openai: ">=1.50.0"
+    python: ">=3.11"
+    
+  requirements:
+    headless: true
+    gui_deps: false
+    runtime: "container"
+    
   # 설정 파일
   config:
+    - name: "pyproject.toml"
+      path: "pyproject.toml"
+      description: "Python project configuration"
+      
     - name: "settings.py"
       path: "config/settings.py"
-      description: "Main configuration settings"
+      description: "Application settings"
       
     - name: "requirements.txt"
       path: "requirements.txt"
@@ -115,8 +206,9 @@ spec:
     
   # 지원 및 연락처
   support:
-    issues: "https://github.com/your-repo/msl-mcp-server/issues"
-    documentation: "https://github.com/your-repo/msl-mcp-server/wiki"
+    repository: "https://github.com/ImOrenge/msl-mcp-server"
+    issues: "https://github.com/ImOrenge/msl-mcp-server/issues"
+    documentation: "https://github.com/ImOrenge/msl-mcp-server/wiki"
     
   # 라이선스 및 법적 정보
   legal:
@@ -128,9 +220,12 @@ spec:
     max_script_length: 10000
     max_concurrent_requests: 10
     request_timeout: 60
+    memory_limit: "512Mi"
+    cpu_limit: "0.5"
     
-  # 의존성
-  dependencies:
-    mcp: ">=1.0.0"
-    openai: ">=1.50.0"
-    python: ">=3.11" 
+  # 헬스체크 설정
+  health:
+    endpoint: "/health"
+    timeout: "30s"
+    interval: "30s"
+    retries: 3 

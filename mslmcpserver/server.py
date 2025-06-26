@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """
-MSL MCP Server - 게이머를 위한 매크로 스크립팅 언어 도우미
+MSL (Macro Scripting Language) MCP Server
+
+OpenAI API를 이용한 AI 기반 MSL 스크립트 생성 및 분석 서버
+Model Context Protocol (MCP)를 통해 클라이언트와 통신합니다.
 
 이 서버는 다음 기능을 제공합니다:
 - MSL 스크립트 파싱 및 검증
@@ -9,34 +12,90 @@ MSL MCP Server - 게이머를 위한 매크로 스크립팅 언어 도우미
 - 게임별 매크로 예제 제공
 """
 
-import asyncio
+import os
+import sys
 import logging
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from pathlib import Path
 
-# MSL 도구들 임포트
-from tools.parse_tool import ParseMSLTool
-from tools.generate_tool import GenerateMSLTool
-from tools.validate_tool import ValidateMSLTool
-from tools.optimize_tool import OptimizeMSLTool
-from tools.explain_tool import ExplainMSLTool
-from tools.examples_tool import ExamplesMSLTool
+# Headless 환경 대응: GUI 관련 라이브러리 문제 방지
+def setup_headless_environment():
+    """Headless 환경에서 GUI 라이브러리 문제를 방지하는 설정"""
+    os.environ.setdefault('DISPLAY', ':99')
+    os.environ.setdefault('MPLBACKEND', 'Agg')
+    os.environ.setdefault('NO_AT_BRIDGE', '1')
+    
+    # pyautogui가 import될 수도 있는 경우를 대비해 fail-safe 비활성화
+    try:
+        import pyautogui
+        pyautogui.FAILSAFE = False
+        pyautogui.PAUSE = 0.1
+    except (ImportError, Exception):
+        # pyautogui가 없거나 설정 실패해도 계속 진행
+        pass
+
+# 실행 환경 설정
+setup_headless_environment()
+
+# 이제 안전하게 다른 모듈들 import
+import asyncio
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
+from datetime import datetime
+
+# MCP 관련 import
+try:
+    from mcp.server import Server
+    from mcp.server.stdio import stdio_server
+    from mcp.types import Tool, TextContent
+    import mcp.server.session
+except ImportError as e:
+    logging.error(f"MCP 라이브러리 import 실패: {e}")
+    logging.error("pip install mcp 명령으로 MCP 라이브러리를 설치하세요.")
+    sys.exit(1)
+
+# 로컬 모듈 import
+try:
+    from tools.parse_tool import parse_msl
+    from tools.generate_tool import generate_msl  
+    from tools.validate_tool import validate_msl
+    from tools.optimize_tool import optimize_msl
+    from tools.explain_tool import explain_msl
+    from tools.examples_tool import msl_examples
+    from config.settings import get_settings
+except ImportError as e:
+    logging.error(f"로컬 모듈 import 실패: {e}")
+    logging.error("MSL MCP 서버 구조를 확인하세요.")
+    sys.exit(1)
 
 # 로깅 설정
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("msl-mcp-server")
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('msl_mcp_server.log', encoding='utf-8') if os.path.exists('.') else logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# 전역 설정 로드
+try:
+    settings = get_settings()
+    logger.info(f"설정 로드 완료: OpenAI 모델 = {settings.openai_model}")
+except Exception as e:
+    logger.error(f"설정 로드 실패: {e}")
+    sys.exit(1)
 
 # MCP 서버 인스턴스 생성
-server = Server("msl-assistant")
+server = Server("msl-mcp-server")
 
 # MSL 도구 인스턴스들
-parse_tool = ParseMSLTool()
-generate_tool = GenerateMSLTool()
-validate_tool = ValidateMSLTool()
-optimize_tool = OptimizeMSLTool()
-explain_tool = ExplainMSLTool()
-examples_tool = ExamplesMSLTool()
+parse_tool = parse_msl
+generate_tool = generate_msl
+validate_tool = validate_msl
+optimize_tool = optimize_msl
+explain_tool = explain_msl
+examples_tool = msl_examples
 
 
 @server.list_tools()
@@ -191,17 +250,17 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     """
     try:
         if name == "parse_msl":
-            result = await parse_tool.execute(arguments)
+            result = await parse_tool(arguments)
         elif name == "generate_msl":
-            result = await generate_tool.execute(arguments)
+            result = await generate_tool(arguments)
         elif name == "validate_msl":
-            result = await validate_tool.execute(arguments)
+            result = await validate_tool(arguments)
         elif name == "optimize_msl":
-            result = await optimize_tool.execute(arguments)
+            result = await optimize_tool(arguments)
         elif name == "explain_msl":
-            result = await explain_tool.execute(arguments)
+            result = await explain_tool(arguments)
         elif name == "msl_examples":
-            result = await examples_tool.execute(arguments)
+            result = await examples_tool(arguments)
         else:
             return [TextContent(type="text", text=f"알 수 없는 도구: {name}")]
         
