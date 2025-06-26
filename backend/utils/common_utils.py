@@ -7,19 +7,23 @@ VoiceMacro Pro 공통 유틸리티 모듈
 import json
 import logging
 import sys
+import os
 from datetime import datetime
 from typing import Dict, Any, List, Union
+from logging.handlers import RotatingFileHandler
 
 # ============================================================================
 # 로깅 관련 유틸리티
 # ============================================================================
 
-def get_logger(name: str) -> logging.Logger:
+def get_logger(name: str, log_file: str = None) -> logging.Logger:
     """
-    로거 인스턴스를 생성하고 반환하는 함수
+    로거 인스턴스를 생성하고 반환하는 함수 (개선된 버전)
+    파일 로깅과 회전 기능을 포함합니다.
     
     Args:
         name (str): 로거 이름 (보통 __name__ 사용)
+        log_file (str, optional): 로그 파일 경로. None이면 기본 경로 사용
     
     Returns:
         logging.Logger: 설정된 로거 인스턴스
@@ -27,6 +31,7 @@ def get_logger(name: str) -> logging.Logger:
     Example:
         >>> logger = get_logger(__name__)
         >>> logger.info("테스트 메시지")
+        >>> logger = get_logger(__name__, "custom.log")  # 커스텀 로그 파일
     """
     logger = logging.getLogger(name)
     
@@ -37,24 +42,180 @@ def get_logger(name: str) -> logging.Logger:
     # 로거 레벨 설정
     logger.setLevel(logging.DEBUG)
     
-    # 콘솔 핸들러 생성
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    
     # 포맷터 설정
     formatter = logging.Formatter(
         fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    console_handler.setFormatter(formatter)
     
-    # 핸들러 추가
+    # 콘솔 핸들러 생성
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
+    
+    # 파일 핸들러 생성 (회전 기능 포함)
+    try:
+        # 로그 파일 경로 설정
+        if log_file is None:
+            # 기본 로그 디렉토리 생성
+            log_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+            today = datetime.now().strftime("%Y-%m-%d")
+            log_file = os.path.join(log_dir, f'backend_{today}.log')
+        
+        # 디렉토리 존재 확인 및 생성
+        log_dir = os.path.dirname(log_file)
+        if log_dir and not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+        
+        # 회전 파일 핸들러 생성 (최대 10MB, 5개 백업 파일 유지)
+        file_handler = RotatingFileHandler(
+            log_file, 
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        
+        # 파일 핸들러 추가 성공 로그
+        logger.info(f"로그 파일 핸들러 설정 완료: {log_file}")
+        
+    except (OSError, IOError, PermissionError) as e:
+        # 파일 핸들러 생성 실패 시 대체 경로 시도
+        try:
+            # 임시 디렉토리에 로그 파일 생성
+            import tempfile
+            temp_log_dir = os.path.join(tempfile.gettempdir(), 'VoiceMacroPro_Backend_Logs')
+            os.makedirs(temp_log_dir, exist_ok=True)
+            
+            today = datetime.now().strftime("%Y-%m-%d")
+            temp_log_file = os.path.join(temp_log_dir, f'backend_emergency_{today}.log')
+            
+            file_handler = RotatingFileHandler(
+                temp_log_file,
+                maxBytes=10*1024*1024,
+                backupCount=3,
+                encoding='utf-8'
+            )
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+            
+            # 경고 메시지 출력
+            warning_msg = f"기본 로그 경로 실패로 임시 경로 사용: {temp_log_file} (원본 오류: {e})"
+            logger.warning(warning_msg)
+            print(f"WARNING: {warning_msg}")
+            
+        except Exception as alt_e:
+            # 대체 경로도 실패하면 콘솔에만 로깅
+            error_msg = f"모든 로그 파일 설정 실패: 원본 오류={e}, 대체 오류={alt_e}"
+            print(f"ERROR: {error_msg}")
+            logger.error("파일 로깅을 사용할 수 없습니다. 콘솔에만 로그가 출력됩니다.")
     
     # 중복 로그 방지
     logger.propagate = False
     
     return logger
+
+def setup_file_logging(log_directory: str = None, log_level: str = "INFO") -> bool:
+    """
+    파일 로깅을 설정하는 함수
+    
+    Args:
+        log_directory (str, optional): 로그 파일을 저장할 디렉토리
+        log_level (str): 로그 레벨 ("DEBUG", "INFO", "WARNING", "ERROR")
+    
+    Returns:
+        bool: 설정 성공 여부
+    
+    Example:
+        >>> setup_file_logging("/path/to/logs", "DEBUG")
+        True
+    """
+    try:
+        # 기본 로그 디렉토리 설정
+        if log_directory is None:
+            log_directory = os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'logs')
+        
+        # 디렉토리 생성
+        os.makedirs(log_directory, exist_ok=True)
+        
+        # 로그 파일 경로
+        today = datetime.now().strftime("%Y-%m-%d")
+        log_file = os.path.join(log_directory, f'backend_system_{today}.log')
+        
+        # 루트 로거 설정
+        root_logger = logging.getLogger()
+        
+        # 기존 핸들러 제거 (중복 방지)
+        for handler in root_logger.handlers[:]:
+            if isinstance(handler, (logging.FileHandler, RotatingFileHandler)):
+                root_logger.removeHandler(handler)
+        
+        # 파일 핸들러 추가
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        
+        # 포맷터 설정
+        formatter = logging.Formatter(
+            fmt='%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(formatter)
+        
+        # 로그 레벨 설정
+        log_level_mapping = {
+            'DEBUG': logging.DEBUG,
+            'INFO': logging.INFO,
+            'WARNING': logging.WARNING,
+            'ERROR': logging.ERROR
+        }
+        file_handler.setLevel(log_level_mapping.get(log_level.upper(), logging.INFO))
+        
+        root_logger.addHandler(file_handler)
+        root_logger.setLevel(logging.DEBUG)
+        
+        # 설정 완료 로그
+        logging.info(f"파일 로깅 설정 완료: {log_file}")
+        return True
+        
+    except Exception as e:
+        print(f"ERROR: 파일 로깅 설정 실패: {e}")
+        return False
+
+def log_with_context(logger: logging.Logger, level: str, message: str, 
+                    context: Dict[str, Any] = None) -> None:
+    """
+    컨텍스트 정보와 함께 로그를 기록하는 함수
+    
+    Args:
+        logger (logging.Logger): 로거 인스턴스
+        level (str): 로그 레벨 ("debug", "info", "warning", "error")
+        message (str): 로그 메시지
+        context (Dict, optional): 추가 컨텍스트 정보
+    
+    Example:
+        >>> logger = get_logger(__name__)
+        >>> context = {"user_id": 123, "action": "login"}
+        >>> log_with_context(logger, "info", "사용자 로그인", context)
+    """
+    if context:
+        # 컨텍스트 정보를 JSON 형태로 추가
+        context_str = json.dumps(context, ensure_ascii=False)
+        full_message = f"{message} | Context: {context_str}"
+    else:
+        full_message = message
+    
+    # 로그 레벨에 따라 적절한 메서드 호출
+    level_method = getattr(logger, level.lower(), logger.info)
+    level_method(full_message)
 
 # ============================================================================
 # 날짜/시간 관련 유틸리티

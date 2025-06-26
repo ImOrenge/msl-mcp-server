@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Text;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 namespace VoiceMacroPro.Services
 {
@@ -183,19 +184,138 @@ namespace VoiceMacroPro.Services
         /// <summary>
         /// 로깅 서비스 생성자
         /// 로그 파일 경로를 설정하고 초기화합니다.
+        /// 개선된 버전: 사전 검증 및 대체 경로 준비
         /// </summary>
         public LoggingService()
         {
-            // 로그 폴더 생성
-            var logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
-            Directory.CreateDirectory(logDirectory);
+            try
+            {
+                // 기본 로그 폴더 경로
+                var logDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
+                
+                // 로그 폴더 생성 및 검증
+                if (!EnsureLogDirectory(logDirectory))
+                {
+                    // 기본 경로 실패 시 대체 경로 사용
+                    logDirectory = Path.Combine(Path.GetTempPath(), "VoiceMacroPro_Logs");
+                    if (!EnsureLogDirectory(logDirectory))
+                    {
+                        // 모든 경로 실패 시 기본값 설정 (메모리에만 로그 유지)
+                        _logFilePath = "";
+                        LogWarning("로그 파일 저장을 사용할 수 없습니다. 메모리에만 로그를 유지합니다.");
+                        return;
+                    }
+                    else
+                    {
+                        LogWarning($"기본 로그 디렉토리 접근 실패. 임시 디렉토리 사용: {logDirectory}");
+                    }
+                }
 
-            // 로그 파일 경로 설정 (날짜별)
-            var today = DateTime.Now.ToString("yyyy-MM-dd");
-            _logFilePath = Path.Combine(logDirectory, $"VoiceMacroPro_{today}.log");
+                // 로그 파일 경로 설정 (날짜별)
+                var today = DateTime.Now.ToString("yyyy-MM-dd");
+                _logFilePath = Path.Combine(logDirectory, $"VoiceMacroPro_{today}.log");
 
-            // 서비스 시작 로그
-            LogInfo("로깅 서비스가 시작되었습니다.", null);
+                // 파일 쓰기 권한 테스트
+                if (!TestFileWritePermission(_logFilePath))
+                {
+                    // 권한 문제 시 타임스탬프 포함한 대체 파일명 사용
+                    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    _logFilePath = Path.Combine(logDirectory, $"VoiceMacroPro_{today}_{timestamp}.log");
+                    
+                    if (!TestFileWritePermission(_logFilePath))
+                    {
+                        LogWarning("로그 파일 쓰기 권한 문제로 인해 파일 로깅이 제한될 수 있습니다.");
+                    }
+                }
+
+                // 서비스 시작 로그
+                LogInfo($"로깅 서비스가 시작되었습니다. 로그 파일: {_logFilePath}", null);
+                
+                // 시스템 정보 로그
+                LogInfo($"애플리케이션 버전: {GetApplicationVersion()}", null);
+                LogInfo($"시스템 정보: {Environment.OSVersion}", null);
+                LogInfo($"사용 가능한 메모리: {GC.GetTotalMemory(false):N0} bytes", null);
+            }
+            catch (Exception ex)
+            {
+                // 초기화 실패 시에도 서비스는 동작해야 함
+                _logFilePath = "";
+                Console.WriteLine($"로깅 서비스 초기화 중 오류 발생: {ex.Message}");
+                
+                // 기본 로그 항목 추가
+                var errorEntry = new LogEntry
+                {
+                    Timestamp = DateTime.Now,
+                    Level = LogLevel.Error,
+                    Message = $"로깅 서비스 초기화 실패: {ex.Message}",
+                    MacroId = null
+                };
+                LogEntries.Add(errorEntry);
+            }
+        }
+        
+        /// <summary>
+        /// 로그 디렉토리 생성 및 검증하는 메서드
+        /// </summary>
+        /// <param name="directoryPath">검증할 디렉토리 경로</param>
+        /// <returns>디렉토리 사용 가능 여부</returns>
+        private bool EnsureLogDirectory(string directoryPath)
+        {
+            try
+            {
+                // 디렉토리 생성
+                Directory.CreateDirectory(directoryPath);
+                
+                // 쓰기 권한 테스트
+                var testFile = Path.Combine(directoryPath, $"test_{Guid.NewGuid():N}.tmp");
+                File.WriteAllText(testFile, "test");
+                File.Delete(testFile);
+                
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"로그 디렉토리 설정 실패: {directoryPath} - {ex.Message}");
+                return false;
+            }
+        }
+        
+        /// <summary>
+        /// 파일 쓰기 권한을 테스트하는 메서드
+        /// </summary>
+        /// <param name="filePath">테스트할 파일 경로</param>
+        /// <returns>쓰기 가능 여부</returns>
+        private bool TestFileWritePermission(string filePath)
+        {
+            try
+            {
+                // 임시 내용으로 쓰기 테스트
+                var testContent = $"# VoiceMacro Pro 로그 파일 - 생성 시간: {DateTime.Now:yyyy-MM-dd HH:mm:ss}" + Environment.NewLine;
+                File.WriteAllText(filePath, testContent);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        
+        /// <summary>
+        /// 애플리케이션 버전을 가져오는 메서드
+        /// </summary>
+        /// <returns>애플리케이션 버전 문자열</returns>
+        private string GetApplicationVersion()
+        {
+            try
+            {
+                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
+                var version = assembly.GetName().Version;
+                return version?.ToString() ?? "Unknown";
+            }
+            catch
+            {
+                return "Unknown";
+            }
         }
 
         /// <summary>
@@ -294,19 +414,189 @@ namespace VoiceMacroPro.Services
         }
 
         /// <summary>
-        /// 로그를 파일에 기록하는 메서드
+        /// 로그를 파일에 기록하는 메서드 (개선된 버전)
+        /// 파일 저장 실패 시 재시도 및 대체 경로 사용
         /// </summary>
         /// <param name="logEntry">기록할 로그 항목</param>
         private async Task WriteLogToFile(LogEntry logEntry)
         {
+            const int maxRetries = 3;
+            int retryCount = 0;
+            
+            while (retryCount < maxRetries)
+            {
+                try
+                {
+                    // 디렉토리 존재 확인 및 생성
+                    var directory = Path.GetDirectoryName(_logFilePath);
+                    if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    
+                    // 디스크 공간 확인 (최소 10MB 필요)
+                    var driveInfo = new DriveInfo(Path.GetPathRoot(_logFilePath) ?? "C:");
+                    if (driveInfo.AvailableFreeSpace < 10 * 1024 * 1024) // 10MB
+                    {
+                        Console.WriteLine("경고: 디스크 공간이 부족합니다. 로그 파일 저장을 건너뜁니다.");
+                        return;
+                    }
+                    
+                    // 파일 크기 확인 (10MB 초과 시 새 파일 생성)
+                    if (File.Exists(_logFilePath))
+                    {
+                        var fileInfo = new FileInfo(_logFilePath);
+                        if (fileInfo.Length > 10 * 1024 * 1024) // 10MB
+                        {
+                            await RotateLogFile();
+                        }
+                    }
+                    
+                    // 파일에 로그 기록
+                    await File.AppendAllTextAsync(_logFilePath, logEntry.FullText + Environment.NewLine);
+                    return; // 성공 시 메서드 종료
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    if (retryCount == maxRetries - 1)
+                    {
+                        // 마지막 재시도에서도 실패하면 대체 경로 시도
+                        await TryAlternativeLogPath(logEntry, ex);
+                        return;
+                    }
+                }
+                catch (DirectoryNotFoundException ex)
+                {
+                    Console.WriteLine($"로그 디렉토리를 찾을 수 없습니다: {ex.Message}");
+                    // 디렉토리 재생성 시도
+                    try
+                    {
+                        var directory = Path.GetDirectoryName(_logFilePath);
+                        if (!string.IsNullOrEmpty(directory))
+                        {
+                            Directory.CreateDirectory(directory);
+                        }
+                    }
+                    catch (Exception createEx)
+                    {
+                        Console.WriteLine($"디렉토리 생성 실패: {createEx.Message}");
+                    }
+                }
+                catch (IOException ex) when (ex.Message.Contains("being used"))
+                {
+                    // 파일이 다른 프로세스에서 사용 중인 경우 잠시 대기
+                    await Task.Delay(100 * (retryCount + 1)); // 점진적 대기
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"로그 파일 기록 실패 (시도 {retryCount + 1}/{maxRetries}): {ex.Message}");
+                    
+                    if (retryCount == maxRetries - 1)
+                    {
+                        // 마지막 재시도에서도 실패하면 대체 방법 사용
+                        await TryAlternativeLogPath(logEntry, ex);
+                        return;
+                    }
+                }
+                
+                retryCount++;
+                
+                // 재시도 전 짧은 대기
+                if (retryCount < maxRetries)
+                {
+                    await Task.Delay(200 * retryCount); // 점진적 대기 (200ms, 400ms, 600ms)
+                }
+            }
+        }
+        
+        /// <summary>
+        /// 로그 파일 회전 (크기가 커졌을 때 새 파일 생성)
+        /// </summary>
+        private async Task RotateLogFile()
+        {
             try
             {
-                await File.AppendAllTextAsync(_logFilePath, logEntry.FullText + Environment.NewLine);
+                var directory = Path.GetDirectoryName(_logFilePath);
+                var fileName = Path.GetFileNameWithoutExtension(_logFilePath);
+                var extension = Path.GetExtension(_logFilePath);
+                var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                
+                var rotatedFileName = $"{fileName}_{timestamp}{extension}";
+                var rotatedFilePath = Path.Combine(directory ?? "", rotatedFileName);
+                
+                // 기존 파일을 회전된 이름으로 이동
+                if (File.Exists(_logFilePath))
+                {
+                    File.Move(_logFilePath, rotatedFilePath);
+                }
+                
+                // 새로운 로그 파일 시작 메시지
+                var rotationEntry = new LogEntry
+                {
+                    Timestamp = DateTime.Now,
+                    Level = LogLevel.Info,
+                    Message = $"로그 파일이 회전되었습니다. 이전 파일: {rotatedFileName}"
+                };
+                
+                await File.AppendAllTextAsync(_logFilePath, rotationEntry.FullText + Environment.NewLine);
             }
             catch (Exception ex)
             {
-                // 파일 기록 실패 시 콘솔에만 출력
-                Console.WriteLine($"로그 파일 기록 실패: {ex.Message}");
+                Console.WriteLine($"로그 파일 회전 실패: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// 대체 로그 경로를 시도하는 메서드
+        /// </summary>
+        /// <param name="logEntry">기록할 로그 항목</param>
+        /// <param name="originalException">원본 예외</param>
+        private async Task TryAlternativeLogPath(LogEntry logEntry, Exception originalException)
+        {
+            try
+            {
+                // 임시 디렉토리에 로그 파일 생성 시도
+                var tempLogPath = Path.Combine(Path.GetTempPath(), "VoiceMacroPro_Logs");
+                Directory.CreateDirectory(tempLogPath);
+                
+                var today = DateTime.Now.ToString("yyyy-MM-dd");
+                var alternativeLogFile = Path.Combine(tempLogPath, $"VoiceMacroPro_Emergency_{today}.log");
+                
+                // 첫 번째 대체 경로 사용 시 알림 메시지 추가
+                if (!File.Exists(alternativeLogFile))
+                {
+                    var warningMessage = $"[{DateTime.Now:HH:mm:ss.fff}] [WARNING] 기본 로그 경로 실패로 임시 경로 사용: {alternativeLogFile}" + Environment.NewLine;
+                    warningMessage += $"[{DateTime.Now:HH:mm:ss.fff}] [ERROR] 원본 오류: {originalException.Message}" + Environment.NewLine;
+                    await File.AppendAllTextAsync(alternativeLogFile, warningMessage);
+                }
+                
+                await File.AppendAllTextAsync(alternativeLogFile, logEntry.FullText + Environment.NewLine);
+                
+                // 한 번만 경고 메시지 출력
+                if (_logFilePath != alternativeLogFile)
+                {
+                    Console.WriteLine($"경고: 기본 로그 파일 저장 실패. 임시 경로 사용: {alternativeLogFile}");
+                    _logFilePath = alternativeLogFile; // 이후 로그들도 대체 경로 사용
+                }
+            }
+            catch (Exception altEx)
+            {
+                // 대체 경로도 실패하면 메모리에만 보관하고 콘솔에 출력
+                Console.WriteLine($"모든 로그 파일 저장 방법 실패: 원본 오류={originalException.Message}, 대체 경로 오류={altEx.Message}");
+                Console.WriteLine($"로그 내용: {logEntry.FullText}");
+                
+                // 사용자에게 알림 (UI 스레드에서 실행)
+                Application.Current?.Dispatcher.BeginInvoke(() =>
+                {
+                    var warningEntry = new LogEntry
+                    {
+                        Timestamp = DateTime.Now,
+                        Level = LogLevel.Warning,
+                        Message = "로그 파일 저장에 실패했습니다. 로그는 화면에만 표시됩니다.",
+                        MacroId = null
+                    };
+                    LogEntries.Add(warningEntry);
+                });
             }
         }
 
