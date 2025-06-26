@@ -4,24 +4,20 @@ FROM python:3.11-slim
 # 작업 디렉토리 설정
 WORKDIR /app
 
-# Poetry 설치
-RUN pip install poetry
+# 시스템 의존성 설치
+RUN apt-get update && apt-get install -y \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
 
-# 프로젝트 파일 복사
-COPY pyproject.toml poetry.lock* ./
-COPY README.md ./
+# 필요한 Python 패키지 설치
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 애플리케이션 파일 복사
 COPY src ./src
+COPY README.md ./
 
-# 의존성 설치
-RUN poetry config virtualenvs.create false \
-    && poetry install --no-interaction --no-ansi --no-root
-
-# 환경 변수 설정
-ENV MSL_MCP_HOST=0.0.0.0
-ENV MSL_MCP_PORT=8000
-ENV MSL_MCP_LOG_LEVEL=info
-
-# 포트 노출
+# 포트 설정
 EXPOSE 8000
 
 # 서버 실행
