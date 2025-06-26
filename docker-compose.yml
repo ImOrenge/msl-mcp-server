@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  msl-mcp-server:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - MSL_MCP_HOST=0.0.0.0
+      - MSL_MCP_PORT=8000
+      - MSL_MCP_LOG_LEVEL=info
+    volumes:
+      - ./src:/app/src
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s 
