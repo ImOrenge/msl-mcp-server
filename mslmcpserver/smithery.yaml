@@ -1,0 +1,136 @@
+apiVersion: smithery.ai/v1
+kind: MCPServer
+metadata:
+  name: msl-mcp-server
+  version: "1.0.0"
+  description: "MSL (Macro Scripting Language) MCP Server with OpenAI Integration"
+  author: "MSL Development Team"
+  license: "MIT"
+  tags:
+    - macro
+    - scripting
+    - gaming
+    - automation
+    - msl
+    - openai
+    - ai-powered
+
+spec:
+  # 서버 기본 설정
+  server:
+    name: "MSL MCP Server"
+    description: "AI-powered MSL script generation and analysis server"
+    version: "1.0.0"
+    
+  # 런타임 설정
+  runtime:
+    type: "docker"
+    image: "msl-mcp-server:latest"
+    build:
+      context: "."
+      dockerfile: "Dockerfile"
+    
+  # 환경변수 설정
+  environment:
+    required:
+      - name: "OPENAI_API_KEY"
+        description: "OpenAI API key for AI-powered MSL generation"
+        type: "secret"
+    optional:
+      - name: "MSL_OPENAI_MODEL"
+        description: "OpenAI model to use (default: gpt-4o)"
+        default: "gpt-4o"
+      - name: "MSL_DEBUG"
+        description: "Enable debug mode"
+        default: "false"
+      - name: "MSL_MAX_CONCURRENT_REQUESTS"
+        description: "Maximum concurrent requests"
+        default: "10"
+
+  # MCP 도구 정의
+  tools:
+    - name: "parse_msl"
+      description: "Parse and analyze MSL scripts with syntax validation"
+      category: "analysis"
+      
+    - name: "generate_msl"
+      description: "Generate MSL scripts from natural language prompts using AI"
+      category: "generation"
+      ai_powered: true
+      
+    - name: "validate_msl"
+      description: "Validate MSL scripts for syntax, performance, and safety"
+      category: "validation"
+      
+    - name: "optimize_msl"
+      description: "Optimize MSL scripts for better performance and readability"
+      category: "optimization"
+      ai_powered: true
+      
+    - name: "explain_msl"
+      description: "Generate educational explanations for MSL scripts"
+      category: "education"
+      ai_powered: true
+      
+    - name: "msl_examples"
+      description: "Provide categorized MSL script examples for learning"
+      category: "examples"
+
+  # 지원되는 언어
+  languages:
+    - name: "MSL"
+      description: "Macro Scripting Language for gaming automation"
+      extensions: [".msl"]
+      syntax_highlighting: true
+
+  # 사용 케이스
+  useCases:
+    - title: "Game Macro Creation"
+      description: "Create complex gaming macros with natural language"
+      example: "generate_msl(prompt='Attack combo with Q->W->E keys')"
+      
+    - title: "Script Optimization"
+      description: "Optimize existing MSL scripts for better performance"
+      example: "optimize_msl(script='Q,W,E', level='aggressive')"
+      
+    - title: "Learning MSL"
+      description: "Learn MSL syntax through examples and explanations"
+      example: "msl_examples(category='combat', game='fps')"
+
+  # 설정 파일
+  config:
+    - name: "settings.py"
+      path: "config/settings.py"
+      description: "Main configuration settings"
+      
+    - name: "requirements.txt"
+      path: "requirements.txt"
+      description: "Python dependencies"
+
+  # 문서화
+  documentation:
+    readme: "README.md"
+    examples: "examples/"
+    api_docs: true
+    
+  # 지원 및 연락처
+  support:
+    issues: "https://github.com/your-repo/msl-mcp-server/issues"
+    documentation: "https://github.com/your-repo/msl-mcp-server/wiki"
+    
+  # 라이선스 및 법적 정보
+  legal:
+    license: "MIT"
+    privacy_policy: "This server processes MSL scripts locally and may send prompts to OpenAI for AI generation features."
+    
+  # 성능 및 제한사항
+  limits:
+    max_script_length: 10000
+    max_concurrent_requests: 10
+    request_timeout: 60
+    
+  # 의존성
+  dependencies:
+    mcp: ">=1.0.0"
+    openai: ">=1.50.0"
+    python: ">=3.11" 
