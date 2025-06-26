@@ -172,14 +172,30 @@ class IntegratedVoiceMacroTest:
         try:
             print(f"⚡ 매크로 실행 시작: ID={macro_id}")
             
-            # 실제 매크로 실행 (시뮬레이션 모드)
-            result = macro_execution_service.execute_macro(macro_id)
+            # 매크로 데이터 가져오기
+            macro_data = None
+            macros = macro_service.get_all_macros()
+            for macro in macros:
+                if macro.get('id') == macro_id:
+                    macro_data = macro
+                    break
             
-            if result.get("success"):
-                print(f"✅ 매크로 실행 완료: {result.get('message', '성공')}")
+            if not macro_data:
+                print(f"❌ 매크로를 찾을 수 없습니다: ID={macro_id}")
+                return False
+            
+            # 매크로 실행 서비스 인스턴스 생성 및 비동기 실행
+            from backend.services.macro_execution_service import MacroExecutionService
+            execution_service = MacroExecutionService()
+            
+            # 비동기 매크로 실행
+            success = await execution_service.execute_macro(macro_data)
+            
+            if success:
+                print(f"✅ 매크로 실행 완료: {macro_data.get('name', 'Unknown')}")
                 return True
             else:
-                print(f"❌ 매크로 실행 실패: {result.get('message', '알 수 없는 오류')}")
+                print(f"❌ 매크로 실행 실패: {macro_data.get('name', 'Unknown')}")
                 return False
                 
         except Exception as e:
@@ -216,23 +232,112 @@ class IntegratedVoiceMacroTest:
             return
         
         print("\n📋 3단계: 실시간 오디오 테스트")
-        print("🎤 실제 마이크로 음성 명령어를 말해보세요. (10초간 대기)")
+        print("🎤 실제 마이크로 음성 명령어를 말해보세요.")
         print("💡 예시: '공격해', '포션 먹어', '스킬 사용' 등")
+        print("⏰ 5초간 녹음합니다...")
         
         try:
-            # 여기서 실제 마이크 입력을 받을 수 있지만, 
-            # 현재는 시뮬레이션으로 대체
-            print("📝 실제 마이크 입력은 향후 구현 예정입니다.")
-            
-            # 가상의 오디오 데이터 전송 시뮬레이션
-            dummy_audio = b'\x00' * 2400  # 100ms worth of silence
-            await self.gpt4o_service.send_audio_chunk(dummy_audio)
-            
-            # 잠시 대기하여 응답 확인
-            await asyncio.sleep(2)
+            # 실제 마이크 입력 구현
+            await self._record_and_process_real_audio()
             
         except Exception as e:
             print(f"❌ 실시간 오디오 테스트 오류: {e}")
+    
+    async def _record_and_process_real_audio(self):
+        """실제 마이크에서 오디오를 녹음하고 처리"""
+        try:
+            import sounddevice as sd
+            import numpy as np
+            
+            # 오디오 설정 (GPT-4o 최적화)
+            sample_rate = 24000  # 24kHz
+            channels = 1  # Mono
+            duration = 5.0  # 5초간 녹음
+            
+            print(f"🎙️ 마이크 녹음 시작 ({duration}초)...")
+            
+            # 실제 마이크에서 녹음
+            audio_data = sd.rec(
+                int(duration * sample_rate), 
+                samplerate=sample_rate, 
+                channels=channels,
+                dtype='float32'
+            )
+            
+            # 녹음 완료 대기
+            sd.wait()
+            
+            print("📡 오디오 데이터를 GPT-4o로 전송 중...")
+            
+            # float32 numpy array를 int16 PCM으로 변환
+            audio_int16 = (audio_data.flatten() * 32767).astype(np.int16)
+            audio_bytes = audio_int16.tobytes()
+            
+            # 청크 단위로 전송 (100ms씩)
+            chunk_size = int(sample_rate * 0.1 * 2)  # 100ms * 2 bytes per sample
+            total_chunks = len(audio_bytes) // chunk_size
+            
+            for i in range(total_chunks):
+                start_idx = i * chunk_size
+                end_idx = min(start_idx + chunk_size, len(audio_bytes))
+                chunk = audio_bytes[start_idx:end_idx]
+                
+                # GPT-4o로 오디오 청크 전송
+                await self.gpt4o_service.send_audio_chunk(chunk)
+                
+                # 짧은 대기 (실시간 시뮬레이션)
+                await asyncio.sleep(0.01)
+            
+            # 마지막 오디오 버퍼 커밋
+            await self.gpt4o_service.commit_audio_buffer()
+            
+            print("✅ 오디오 전송 완료. 트랜스크립션 결과를 기다리는 중...")
+            
+            # 트랜스크립션 결과 대기 (최대 5초)
+            await asyncio.sleep(5)
+            
+        except ImportError:
+            print("⚠️ sounddevice 라이브러리가 설치되지 않았습니다.")
+            print("   'pip install sounddevice' 명령으로 설치해주세요.")
+            
+            # 대안: 시뮬레이션 모드
+            await self._simulate_audio_input()
+            
+        except Exception as e:
+            print(f"❌ 실제 마이크 녹음 오류: {e}")
+            print("🔄 시뮬레이션 모드로 전환합니다.")
+            await self._simulate_audio_input()
+    
+    async def _simulate_audio_input(self):
+        """오디오 입력 시뮬레이션"""
+        print("🎭 오디오 입력 시뮬레이션 모드")
+        
+        # 가상의 오디오 데이터 생성 (사인파)
+        import math
+        sample_rate = 24000
+        duration = 1.0  # 1초
+        frequency = 440  # A4 음계
+        
+        samples = []
+        for i in range(int(sample_rate * duration)):
+            t = i / sample_rate
+            sample = int(32767 * 0.3 * math.sin(2 * math.pi * frequency * t))
+            samples.extend([sample & 0xFF, (sample >> 8) & 0xFF])
+        
+        audio_bytes = bytes(samples)
+        
+        # 청크 단위로 전송
+        chunk_size = 2400  # 100ms chunk
+        for i in range(0, len(audio_bytes), chunk_size):
+            chunk = audio_bytes[i:i+chunk_size]
+            await self.gpt4o_service.send_audio_chunk(chunk)
+            await asyncio.sleep(0.1)  # 100ms 간격
+        
+        await self.gpt4o_service.commit_audio_buffer()
+        print("✅ 시뮬레이션 오디오 전송 완료")
+        
+        # 잠시 대기
+        await asyncio.sleep(2)
     
     def print_test_results(self):
         """테스트 결과 출력"""
