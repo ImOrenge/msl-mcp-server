@@ -310,8 +310,9 @@ wheels/
 
 # Virtual Environment
 venv/
-ENV/
 env/
+ENV/
+.env
 
 # IDE
 .idea/
@@ -320,14 +321,24 @@ env/
 *.swo
 .DS_Store
 
-# Logs
-logs/
-*.log
-
-# Test coverage
+# Testing
 .coverage
 htmlcov/
 .pytest_cache/
+.tox/
+
+# Logs
+*.log
+logs/
+
+# Local development
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Poetry
+poetry.lock
 
 # Docker
 .docker/

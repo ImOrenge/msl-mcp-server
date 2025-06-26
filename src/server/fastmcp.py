@@ -28,99 +28,85 @@ class FastMCP:
             allow_origins=["*"],
             allow_credentials=True,
             allow_methods=["*"],
-            allow_headers=["*"],
+            allow_headers=["*"]
         )
         
         # 기본 라우트 설정
         self.setup_routes()
-        
-        # 로깅 설정
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        self.logger = logging.getLogger("FastMCP")
-
+    
     def setup_routes(self):
         """기본 라우트 설정"""
-        @self.app.get("/")
-        async def root():
-            return {"status": "ok", "message": "MSL MCP Server is running"}
-
-        @self.app.websocket("/ws/{client_id}")
-        async def websocket_endpoint(websocket: WebSocket, client_id: str):
-            await self.handle_websocket_connection(websocket, client_id)
-
-    async def handle_websocket_connection(self, websocket: WebSocket, client_id: str):
+        @self.app.get("/health")
+        async def health_check():
+            return {"status": "ok", "timestamp": datetime.now().isoformat()}
+        
+        @self.app.websocket("/ws/{session_id}")
+        async def websocket_endpoint(websocket: WebSocket, session_id: str):
+            await self.connect(websocket, session_id)
+            try:
+                while True:
+                    data = await websocket.receive_json()
+                    await self.handle_websocket_message(websocket, session_id, data)
+            except WebSocketDisconnect:
+                await self.disconnect(session_id)
+    
+    async def connect(self, websocket: WebSocket, session_id: str):
         """WebSocket 연결 처리"""
         await websocket.accept()
-        self.active_connections[client_id] = websocket
-        
-        # 컨텍스트 생성
-        self.contexts[client_id] = MCPContext(
-            session_id=client_id,
-            timestamp=datetime.now()
-        )
-        
+        self.active_connections[session_id] = websocket
+        self.contexts[session_id] = MCPContext(session_id=session_id)
+    
+    async def disconnect(self, session_id: str):
+        """WebSocket 연결 해제 처리"""
+        if session_id in self.active_connections:
+            del self.active_connections[session_id]
+        if session_id in self.contexts:
+            del self.contexts[session_id]
+    
+    async def handle_websocket_message(self, websocket: WebSocket, session_id: str, data: Dict):
+        """WebSocket 메시지 처리"""
         try:
-            while True:
-                data = await websocket.receive_text()
-                await self.handle_message(client_id, data)
-        except WebSocketDisconnect:
-            self.handle_disconnect(client_id)
-        except Exception as e:
-            self.logger.error(f"Error in WebSocket connection: {str(e)}")
-            self.handle_disconnect(client_id)
-
-    async def handle_message(self, client_id: str, message: str):
-        """메시지 처리"""
-        try:
-            data = json.loads(message)
-            # JSON-RPC 2.0 형식 검증
-            if "jsonrpc" not in data or data["jsonrpc"] != "2.0":
-                await self.send_error(client_id, -32600, "Invalid Request")
+            if not isinstance(data, dict) or "jsonrpc" not in data:
+                await self.send_error(websocket, -32600, "Invalid Request", None)
                 return
             
-            # 메시지 처리 로직
-            response = await self.process_message(client_id, data)
-            await self.send_response(client_id, response)
+            method = data.get("method")
+            params = data.get("params", {})
+            request_id = data.get("id")
             
-        except json.JSONDecodeError:
-            await self.send_error(client_id, -32700, "Parse error")
+            if not method:
+                await self.send_error(websocket, -32600, "Method not specified", request_id)
+                return
+            
+            result = await self.handle_rpc_method(session_id, method, params)
+            await self.send_result(websocket, result, request_id)
+            
         except Exception as e:
-            self.logger.error(f"Error processing message: {str(e)}")
-            await self.send_error(client_id, -32603, "Internal error")
-
-    async def process_message(self, client_id: str, data: Dict):
-        """메시지 처리 로직"""
-        # 이 메서드는 하위 클래스에서 구현됩니다
-        pass
-
-    async def send_response(self, client_id: str, response: Dict):
-        """응답 전송"""
-        if client_id in self.active_connections:
-            await self.active_connections[client_id].send_text(json.dumps(response))
-
-    async def send_error(self, client_id: str, code: int, message: str):
-        """에러 응답 전송"""
-        error_response = {
+            await self.send_error(websocket, -32603, str(e), data.get("id"))
+    
+    async def handle_rpc_method(self, session_id: str, method: str, params: Dict) -> Any:
+        """RPC 메소드 처리"""
+        raise NotImplementedError("Subclasses must implement handle_rpc_method")
+    
+    async def send_result(self, websocket: WebSocket, result: Any, request_id: Any):
+        """결과 전송"""
+        await websocket.send_json({
+            "jsonrpc": "2.0",
+            "result": result,
+            "id": request_id
+        })
+    
+    async def send_error(self, websocket: WebSocket, code: int, message: str, request_id: Any):
+        """에러 전송"""
+        await websocket.send_json({
             "jsonrpc": "2.0",
             "error": {
                 "code": code,
                 "message": message
             },
-            "id": None
-        }
-        await self.send_response(client_id, error_response)
-
-    def handle_disconnect(self, client_id: str):
-        """연결 종료 처리"""
-        if client_id in self.active_connections:
-            del self.active_connections[client_id]
-        if client_id in self.contexts:
-            del self.contexts[client_id]
-        self.logger.info(f"Client {client_id} disconnected")
-
+            "id": request_id
+        })
+    
     def get_app(self) -> FastAPI:
-        """FastAPI 애플리케이션 반환"""
+        """FastAPI 앱 반환"""
         return self.app 

@@ -1,13 +1,15 @@
-from typing import Dict, Optional
-import json
+from typing import Dict, Any, Optional
+from fastapi import WebSocket
 import logging
+import json
+
 from .fastmcp import FastMCP, MCPContext
 from .resources import ResourceManager, VoiceCommand
 from .tools import ToolManager, ToolContext, ToolResult
 from .prompts import PromptManager, Prompt
 
 class MSLMCPServer(FastMCP):
-    """MSL MCP 서버 구현"""
+    """MSL MCP 서버"""
     def __init__(self):
         super().__init__()
         
@@ -16,9 +18,126 @@ class MSLMCPServer(FastMCP):
         self.tool_manager = ToolManager()
         self.prompt_manager = PromptManager()
         
-        # 추가 라우트 설정
-        self.setup_additional_routes()
+        # 로깅 설정
+        self.logger = logging.getLogger("MSLMCPServer")
         
+    async def handle_rpc_method(self, session_id: str, method: str, params: Dict) -> Any:
+        """RPC 메소드 처리"""
+        try:
+            # 메소드별 처리
+            if method == "voice.process":
+                return await self.process_voice_command(session_id, params)
+            elif method == "tool.execute":
+                return await self.execute_tool(session_id, params)
+            elif method == "prompt.create":
+                return await self.create_prompt(session_id, params)
+            else:
+                raise ValueError(f"Unknown method: {method}")
+                
+        except Exception as e:
+            self.logger.error(f"Error handling RPC method {method}: {str(e)}")
+            raise
+    
+    async def process_voice_command(self, session_id: str, params: Dict) -> Dict:
+        """음성 명령 처리"""
+        try:
+            # 음성 명령 생성
+            command = VoiceCommand(
+                command_id=f"cmd_{session_id}_{len(self.resource_manager.voice_commands)}",
+                text=params.get("text", ""),
+                language=params.get("language", "ko"),
+                metadata=params.get("metadata", {})
+            )
+            
+            # 음성 명령 등록
+            success = await self.resource_manager.register_voice_command(command)
+            if not success:
+                raise Exception("Failed to register voice command")
+            
+            # 프롬프트 생성
+            prompt = Prompt(
+                prompt_id=f"prompt_{command.command_id}",
+                content=command.text,
+                language=command.language,
+                metadata={"command_id": command.command_id}
+            )
+            
+            success = await self.prompt_manager.create_prompt(prompt)
+            if not success:
+                raise Exception("Failed to create prompt")
+            
+            # 도구 실행 컨텍스트 생성
+            tool_context = ToolContext(
+                tool_id="windows_automation",
+                parameters={"command": command.text},
+                metadata={"command_id": command.command_id}
+            )
+            
+            # 도구 실행
+            result = await self.tool_manager.execute_tool(tool_context)
+            
+            return {
+                "command_id": command.command_id,
+                "success": result.success,
+                "result": result.result,
+                "error": result.error
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error processing voice command: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    async def execute_tool(self, session_id: str, params: Dict) -> Dict:
+        """도구 실행"""
+        try:
+            tool_context = ToolContext(
+                tool_id=params.get("tool_id"),
+                parameters=params.get("parameters", {}),
+                metadata=params.get("metadata", {})
+            )
+            
+            result = await self.tool_manager.execute_tool(tool_context)
+            
+            return {
+                "success": result.success,
+                "result": result.result,
+                "error": result.error
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error executing tool: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    async def create_prompt(self, session_id: str, params: Dict) -> Dict:
+        """프롬프트 생성"""
+        try:
+            prompt = Prompt(
+                prompt_id=params.get("prompt_id", f"prompt_{session_id}_{len(self.prompt_manager.prompts)}"),
+                content=params.get("content", ""),
+                language=params.get("language", "ko"),
+                metadata=params.get("metadata", {})
+            )
+            
+            success = await self.prompt_manager.create_prompt(prompt)
+            
+            return {
+                "success": success,
+                "prompt_id": prompt.prompt_id if success else None
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Error creating prompt: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+
     def setup_additional_routes(self):
         """추가 라우트 설정"""
         @self.app.post("/voice-command")

@@ -53,36 +53,34 @@ class ToolManager:
         """기본 도구 등록"""
         self.register_tool("windows_automation", self.windows_automation.execute_command)
         
-    def register_tool(self, tool_id: str, 
-                     handler: Callable[[ToolContext], Awaitable[ToolResult]]) -> bool:
+    async def register_tool(self, tool_id: str, tool_func: Callable[[ToolContext], Awaitable[ToolResult]]) -> bool:
         """도구 등록"""
         try:
-            self.tools[tool_id] = handler
+            self.tools[tool_id] = tool_func
             return True
         except Exception as e:
-            self.logger.error(f"Error registering tool {tool_id}: {str(e)}")
+            self.logger.error(f"Failed to register tool {tool_id}: {str(e)}")
             return False
-            
+    
     async def execute_tool(self, context: ToolContext) -> ToolResult:
         """도구 실행"""
-        if context.tool_id not in self.tools:
-            return ToolResult(
-                success=False,
-                error=f"Tool {context.tool_id} not found",
-                metadata={"type": "tool_error"}
-            )
-            
         try:
-            handler = self.tools[context.tool_id]
-            return await handler(context)
+            if context.tool_id not in self.tools:
+                return ToolResult(
+                    success=False,
+                    error=f"Tool {context.tool_id} not found"
+                )
+            
+            tool_func = self.tools[context.tool_id]
+            return await tool_func(context)
+            
         except Exception as e:
-            self.logger.error(f"Error executing tool {context.tool_id}: {str(e)}")
+            self.logger.error(f"Failed to execute tool {context.tool_id}: {str(e)}")
             return ToolResult(
                 success=False,
-                error=str(e),
-                metadata={"type": "tool_error"}
+                error=str(e)
             )
-            
+    
     def list_tools(self) -> List[str]:
-        """도구 목록 조회"""
+        """등록된 도구 목록 반환"""
         return list(self.tools.keys()) 

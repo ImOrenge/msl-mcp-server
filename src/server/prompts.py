@@ -33,78 +33,71 @@ class PromptManager:
         
     def load_default_templates(self):
         """기본 템플릿 로드"""
-        default_templates = {
-            "voice_command": PromptTemplate(
-                template_id="voice_command",
-                template="사용자가 '{command}'라고 말했습니다. 이 명령을 실행하기 위한 Windows 자동화 동작을 생성해주세요.",
-                parameters=["command"],
-                description="음성 명령을 Windows 자동화 동작으로 변환하는 템플릿"
-            ),
-            "error_handling": PromptTemplate(
-                template_id="error_handling",
-                template="명령 실행 중 오류가 발생했습니다: {error}. 이 오류를 해결하기 위한 제안사항을 제공해주세요.",
-                parameters=["error"],
-                description="오류 처리를 위한 템플릿"
-            )
-        }
-        
-        for template in default_templates.values():
-            self.register_template(template)
-            
-    def register_template(self, template: PromptTemplate) -> bool:
-        """템플릿 등록"""
         try:
-            self.templates[template.template_id] = template
+            # 기본 템플릿 정의
+            default_templates = [
+                PromptTemplate(
+                    template_id="window_command",
+                    template="{program} {action}하기",
+                    parameters=["program", "action"],
+                    description="윈도우 프로그램 제어 명령"
+                ),
+                PromptTemplate(
+                    template_id="input_command",
+                    template="{text} 입력하기",
+                    parameters=["text"],
+                    description="텍스트 입력 명령"
+                )
+            ]
+            
+            # 템플릿 등록
+            for template in default_templates:
+                self.templates[template.template_id] = template
+                
+        except Exception as e:
+            self.logger.error(f"Failed to load default templates: {str(e)}")
+    
+    async def create_prompt(self, prompt: Prompt) -> bool:
+        """프롬프트 생성"""
+        try:
+            self.prompts[prompt.prompt_id] = prompt
             return True
         except Exception as e:
-            self.logger.error(f"Error registering template: {str(e)}")
+            self.logger.error(f"Failed to create prompt: {str(e)}")
             return False
-            
-    async def create_prompt(self, template_id: str, parameters: Dict[str, str]) -> Optional[Prompt]:
-        """프롬프트 생성"""
-        if template_id not in self.templates:
-            return None
-            
-        try:
-            template = self.templates[template_id]
-            content = template.template.format(**parameters)
-            
-            prompt = Prompt(
-                prompt_id=f"{template_id}_{datetime.now().timestamp()}",
-                content=content,
-                metadata={
-                    "template_id": template_id,
-                    "parameters": parameters
-                }
-            )
-            
-            self.prompts[prompt.prompt_id] = prompt
-            return prompt
-            
-        except Exception as e:
-            self.logger.error(f"Error creating prompt: {str(e)}")
-            return None
-            
+    
     async def get_prompt(self, prompt_id: str) -> Optional[Prompt]:
         """프롬프트 조회"""
         return self.prompts.get(prompt_id)
-        
+    
     async def update_prompt(self, prompt_id: str, content: str) -> bool:
         """프롬프트 업데이트"""
-        if prompt_id in self.prompts:
-            prompt = self.prompts[prompt_id]
-            prompt.content = content
-            prompt.updated_at = datetime.now()
-            return True
-        return False
-        
+        try:
+            if prompt_id in self.prompts:
+                prompt = self.prompts[prompt_id]
+                prompt.content = content
+                prompt.updated_at = datetime.now()
+                return True
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to update prompt: {str(e)}")
+            return False
+    
     async def delete_prompt(self, prompt_id: str) -> bool:
         """프롬프트 삭제"""
-        if prompt_id in self.prompts:
-            del self.prompts[prompt_id]
-            return True
-        return False
-        
+        try:
+            if prompt_id in self.prompts:
+                del self.prompts[prompt_id]
+                return True
+            return False
+        except Exception as e:
+            self.logger.error(f"Failed to delete prompt: {str(e)}")
+            return False
+    
+    def get_template(self, template_id: str) -> Optional[PromptTemplate]:
+        """템플릿 조회"""
+        return self.templates.get(template_id)
+    
     def list_templates(self) -> List[PromptTemplate]:
         """템플릿 목록 조회"""
         return list(self.templates.values()) 

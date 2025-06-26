@@ -36,10 +36,13 @@ class ResourceManager:
         
     async def delete_voice_command(self, command_id: str) -> bool:
         """음성 명령 삭제"""
-        if command_id in self.voice_commands:
-            del self.voice_commands[command_id]
-            return True
-        return False
+        try:
+            if command_id in self.voice_commands:
+                del self.voice_commands[command_id]
+                return True
+            return False
+        except Exception:
+            return False
         
     async def list_voice_commands(self) -> List[VoiceCommand]:
         """음성 명령 목록 조회"""
@@ -51,4 +54,12 @@ class ResourceManager:
         return [
             command for command in self.voice_commands.values()
             if query in command.text.lower()
-        ] 
+        ]
+        
+    async def clear_voice_commands(self) -> bool:
+        """모든 음성 명령 삭제"""
+        try:
+            self.voice_commands.clear()
+            return True
+        except Exception:
+            return False 
