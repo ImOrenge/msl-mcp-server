@@ -6,6 +6,7 @@ using NAudio.Wave;
 using VoiceMacroPro.Models;
 using System.Text.Json;
 using System.IO;
+using System.Linq;
 
 namespace VoiceMacroPro.Services
 {
@@ -26,6 +27,11 @@ namespace VoiceMacroPro.Services
         private readonly List<TranscriptionResult> _sessionHistory;
         private readonly object _lock = new();
         private bool _isDisposed;
+
+        // 볼륨 증폭 및 AGC 관련 필드
+        private double _currentGainLevel = 1.0;
+        private readonly Queue<double> _recentAudioLevels = new();
+        private const int AGC_HISTORY_SIZE = 50; // AGC 계산을 위한 최근 오디오 레벨 기록 수
 
         #region 이벤트 정의
         /// <summary>
@@ -63,6 +69,10 @@ namespace VoiceMacroPro.Services
             _serverUrl = serverUrl;
             _loggingService = LoggingService.Instance;
             _audioSettings = new AudioCaptureSettings(); // GPT-4o 최적화 설정
+            
+            // 오디오 설정 검증 및 조정
+            _audioSettings.ValidateAndAdjustAmplificationSettings();
+            
             _sessionHistory = new List<TranscriptionResult>();
             _currentSession = new VoiceSession();
             InitializeAudioCapture();
@@ -295,6 +305,7 @@ namespace VoiceMacroPro.Services
         /// 실시간 오디오 데이터 처리 및 서버 전송 함수
         /// NAudio에서 캡처된 오디오를 Base64로 인코딩하여 WebSocket으로 전송합니다.
         /// Voice Activity Detection (VAD) 로직을 포함하여 실제 음성이 있을 때만 전송합니다.
+        /// 볼륨 증폭 및 자동 게인 컨트롤 기능을 포함합니다.
         /// </summary>
         /// <param name="sender">이벤트 발생자</param>
         /// <param name="e">오디오 데이터 이벤트 인자</param>
@@ -304,32 +315,42 @@ namespace VoiceMacroPro.Services
             {
                 try
                 {
-                    // 오디오 레벨 계산 (음성 입력 시각화용)
-                    double audioLevel = CalculateAudioLevel(e.Buffer, e.BytesRecorded);
-                    AudioLevelChanged?.Invoke(this, audioLevel);
+                    // 원본 오디오 레벨 계산
+                    double originalAudioLevel = CalculateAudioLevel(e.Buffer, e.BytesRecorded);
+                    
+                    // 볼륨 증폭 처리
+                    byte[] processedBuffer = ProcessAudioWithAmplification(e.Buffer, e.BytesRecorded, originalAudioLevel);
+                    
+                    // 증폭된 오디오 레벨 재계산
+                    double amplifiedAudioLevel = CalculateAudioLevel(processedBuffer, e.BytesRecorded);
+                    
+                    // UI용 오디오 레벨 이벤트 발생 (증폭된 레벨 사용)
+                    AudioLevelChanged?.Invoke(this, amplifiedAudioLevel);
 
-                    // Voice Activity Detection (VAD) - 실제 음성이 있는지 확인
-                    bool hasVoiceActivity = IsVoiceActivityDetected(e.Buffer, e.BytesRecorded, audioLevel);
+                    // Voice Activity Detection (VAD) - 증폭된 오디오 기준으로 확인
+                    bool hasVoiceActivity = IsVoiceActivityDetected(processedBuffer, e.BytesRecorded, amplifiedAudioLevel);
                     
                     if (hasVoiceActivity)
                     {
-                        // 오디오 데이터를 Base64로 인코딩
-                        string audioBase64 = Convert.ToBase64String(e.Buffer, 0, e.BytesRecorded);
+                        // 증폭된 오디오 데이터를 Base64로 인코딩
+                        string audioBase64 = Convert.ToBase64String(processedBuffer, 0, e.BytesRecorded);
 
                         // WebSocket을 통해 실시간 오디오 스트리밍 (음성 감지시만)
                         await _socket.EmitAsync("audio_chunk", new { 
                             audio = audioBase64,
-                            audio_level = audioLevel,
+                            audio_level = amplifiedAudioLevel,
+                            original_level = originalAudioLevel,
+                            gain_applied = _currentGainLevel,
                             has_voice = true 
                         });
                         
-                        // 음성 감지 로그 (디버그용 - 너무 많은 로그 방지)
-                        // _loggingService.LogDebug($"🎤 음성 감지됨 (레벨: {audioLevel:F3})");
+                        // 음성 감지 로그 (디버깅용)
+                        _loggingService.LogDebug($"🎤 음성 전송됨 - 원본: {originalAudioLevel:F3}, 증폭: {amplifiedAudioLevel:F3}, 게인: {_currentGainLevel:F2}x");
                     }
                     else
                     {
                         // 음성이 감지되지 않으면 침묵 데이터 전송하지 않음
-                        // _loggingService.LogDebug($"🔇 침묵 감지됨 (레벨: {audioLevel:F3}) - 전송 건너뜀");
+                        _loggingService.LogDebug($"🔇 침묵 감지됨 (원본: {originalAudioLevel:F3}, 증폭: {amplifiedAudioLevel:F3}) - 전송 건너뜀");
                     }
                 }
                 catch (Exception ex)
@@ -452,7 +473,7 @@ namespace VoiceMacroPro.Services
         }
 
         /// <summary>
-        /// 제로 크로싱 비율을 계산하는 함수 (음성/잡음 구분에 도움)
+        /// 제로 크로싱 비율을 계산하는 함수 (음성 신호 분석용)
         /// </summary>
         /// <param name="buffer">오디오 버퍼</param>
         /// <param name="bytesRecorded">녹음된 바이트 수</param>
@@ -462,8 +483,8 @@ namespace VoiceMacroPro.Services
             if (bytesRecorded < 4) return 0.0;
 
             int zeroCrossings = 0;
-            short previousSample = 0;
             int samples = bytesRecorded / 2;
+            short previousSample = 0;
 
             for (int i = 0; i < bytesRecorded; i += 2)
             {
@@ -471,9 +492,7 @@ namespace VoiceMacroPro.Services
                 {
                     short currentSample = (short)((buffer[i + 1] << 8) | buffer[i]);
                     
-                    // 부호가 바뀌었는지 확인 (제로 크로싱)
-                    if (i > 0 && ((previousSample >= 0 && currentSample < 0) || 
-                                  (previousSample < 0 && currentSample >= 0)))
+                    if (i > 0 && ((previousSample >= 0 && currentSample < 0) || (previousSample < 0 && currentSample >= 0)))
                     {
                         zeroCrossings++;
                     }
@@ -482,8 +501,184 @@ namespace VoiceMacroPro.Services
                 }
             }
 
-            // 전체 샘플 수에 대한 제로 크로싱 비율
-            return samples > 1 ? (double)zeroCrossings / (samples - 1) : 0.0;
+            return (double)zeroCrossings / samples;
+        }
+
+        /// <summary>
+        /// 볼륨 증폭 처리를 수행하는 메서드
+        /// 자동 게인 컨트롤, 클리핑 방지, 볼륨 증폭 기능을 포함합니다.
+        /// </summary>
+        /// <param name="inputBuffer">입력 오디오 버퍼</param>
+        /// <param name="bytesRecorded">녹음된 바이트 수</param>
+        /// <param name="currentAudioLevel">현재 오디오 레벨</param>
+        /// <returns>증폭 처리된 오디오 버퍼</returns>
+        private byte[] ProcessAudioWithAmplification(byte[] inputBuffer, int bytesRecorded, double currentAudioLevel)
+        {
+            // 볼륨 증폭이 비활성화된 경우 원본 버퍼 반환
+            if (!_audioSettings.EnableVolumeAmplification)
+            {
+                return inputBuffer;
+            }
+
+            // 출력 버퍼 생성 (원본과 동일한 크기)
+            byte[] outputBuffer = new byte[inputBuffer.Length];
+            Array.Copy(inputBuffer, outputBuffer, bytesRecorded);
+
+            try
+            {
+                // 자동 게인 컨트롤 (AGC) 처리
+                if (_audioSettings.EnableAutoGainControl)
+                {
+                    UpdateAutoGainControl(currentAudioLevel);
+                }
+                else
+                {
+                    // AGC가 비활성화된 경우 고정 증폭 배율 사용
+                    _currentGainLevel = _audioSettings.VolumeAmplification;
+                }
+
+                // 실제 볼륨 증폭 적용
+                ApplyVolumeAmplification(outputBuffer, bytesRecorded, _currentGainLevel);
+
+                return outputBuffer;
+            }
+            catch (Exception ex)
+            {
+                _loggingService.LogError($"볼륨 증폭 처리 오류: {ex.Message}");
+                // 오류 발생 시 원본 버퍼 반환
+                return inputBuffer;
+            }
+        }
+
+        /// <summary>
+        /// 자동 게인 컨트롤 (AGC)을 업데이트하는 메서드
+        /// </summary>
+        /// <param name="currentAudioLevel">현재 오디오 레벨</param>
+        private void UpdateAutoGainControl(double currentAudioLevel)
+        {
+            // 최근 오디오 레벨 기록에 추가
+            _recentAudioLevels.Enqueue(currentAudioLevel);
+            
+            // 기록 크기 제한
+            while (_recentAudioLevels.Count > AGC_HISTORY_SIZE)
+            {
+                _recentAudioLevels.Dequeue();
+            }
+
+            // 충분한 기록이 없으면 현재 설정 유지
+            if (_recentAudioLevels.Count < 10)
+            {
+                return;
+            }
+
+            // 최근 평균 오디오 레벨 계산
+            double averageLevel = _recentAudioLevels.Average();
+            
+            // 목표 레벨과의 차이 계산
+            double targetLevel = _audioSettings.AutoGainTargetLevel;
+            double levelDifference = targetLevel - averageLevel;
+
+            // AGC 조정 (부드러운 조정을 위해 작은 단계로)
+            if (Math.Abs(levelDifference) > 0.1) // 10% 이상 차이가 날 때만 조정
+            {
+                double adjustmentFactor = 1.0 + (levelDifference * 0.5); // 50% 비율로 조정
+                
+                // 새로운 게인 레벨 계산
+                double newGainLevel = _currentGainLevel * adjustmentFactor;
+                
+                // 안전한 범위로 제한 (0.5x ~ 10x)
+                newGainLevel = Math.Max(0.5, Math.Min(10.0, newGainLevel));
+                
+                // 부드러운 전환을 위해 점진적 변경 (10% 단계)
+                _currentGainLevel = _currentGainLevel * 0.9 + newGainLevel * 0.1;
+                
+                _loggingService.LogDebug($"🔧 AGC 조정: 평균 레벨 {averageLevel:F3} → 목표 {targetLevel:F3}, 게인: {_currentGainLevel:F2}x");
+            }
+        }
+
+        /// <summary>
+        /// 실제 볼륨 증폭을 오디오 버퍼에 적용하는 메서드
+        /// </summary>
+        /// <param name="buffer">증폭할 오디오 버퍼</param>
+        /// <param name="bytesRecorded">녹음된 바이트 수</param>
+        /// <param name="gainLevel">적용할 게인 레벨</param>
+        private void ApplyVolumeAmplification(byte[] buffer, int bytesRecorded, double gainLevel)
+        {
+            // 게인이 1.0에 가까우면 증폭 생략 (성능 최적화)
+            if (Math.Abs(gainLevel - 1.0) < 0.01)
+            {
+                return;
+            }
+
+            // 16비트 샘플 처리
+            for (int i = 0; i < bytesRecorded; i += 2)
+            {
+                if (i + 1 < bytesRecorded)
+                {
+                    // 리틀 엔디안 16비트 샘플 읽기
+                    short sample = (short)((buffer[i + 1] << 8) | buffer[i]);
+                    
+                    // 게인 적용
+                    double amplifiedSample = sample * gainLevel;
+                    
+                    // 클리핑 방지
+                    if (_audioSettings.EnableClippingPrevention)
+                    {
+                        amplifiedSample = Math.Max(-32768, Math.Min(32767, amplifiedSample));
+                    }
+                    else
+                    {
+                        // 하드 클리핑 (원본 동작 유지)
+                        amplifiedSample = Math.Max(-32768, Math.Min(32767, amplifiedSample));
+                    }
+                    
+                    // 다시 16비트로 변환
+                    short amplifiedShort = (short)Math.Round(amplifiedSample);
+                    
+                    // 리틀 엔디안으로 버퍼에 저장
+                    buffer[i] = (byte)(amplifiedShort & 0xFF);
+                    buffer[i + 1] = (byte)((amplifiedShort >> 8) & 0xFF);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 현재 볼륨 증폭 설정을 가져오는 메서드
+        /// </summary>
+        /// <returns>현재 볼륨 증폭 정보</returns>
+        public (double amplification, bool enabled, bool agcEnabled, double currentGain) GetVolumeAmplificationInfo()
+        {
+            return (
+                _audioSettings.VolumeAmplification,
+                _audioSettings.EnableVolumeAmplification,
+                _audioSettings.EnableAutoGainControl,
+                _currentGainLevel
+            );
+        }
+
+        /// <summary>
+        /// 볼륨 증폭 설정을 업데이트하는 메서드
+        /// </summary>
+        /// <param name="amplification">증폭 배율</param>
+        /// <param name="enableAmplification">증폭 활성화 여부</param>
+        /// <param name="enableAGC">자동 게인 컨트롤 활성화 여부</param>
+        public void UpdateVolumeAmplificationSettings(double amplification, bool enableAmplification, bool enableAGC = false)
+        {
+            _audioSettings.VolumeAmplification = amplification;
+            _audioSettings.EnableVolumeAmplification = enableAmplification;
+            _audioSettings.EnableAutoGainControl = enableAGC;
+            
+            // 설정 검증 및 조정
+            _audioSettings.ValidateAndAdjustAmplificationSettings();
+            
+            // AGC가 비활성화되면 현재 게인을 고정 배율로 재설정
+            if (!enableAGC)
+            {
+                _currentGainLevel = _audioSettings.VolumeAmplification;
+                _recentAudioLevels.Clear(); // AGC 기록 초기화
+            }
+            
+            _loggingService.LogInfo($"🔊 볼륨 증폭 설정 업데이트: {amplification:F1}x, 활성화: {enableAmplification}, AGC: {enableAGC}");
         }
 
         /// <summary>

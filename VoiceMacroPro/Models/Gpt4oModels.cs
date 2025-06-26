@@ -201,6 +201,34 @@ namespace VoiceMacroPro.Models
         public double MicrophoneSensitivity { get; set; } = 0.8;
 
         /// <summary>
+        /// 오디오 볼륨 증폭 배율 (1.0 = 증폭 없음, 2.0 = 2배 증폭, 0.5 = 절반 감소)
+        /// 권장 범위: 0.1 ~ 5.0
+        /// </summary>
+        public double VolumeAmplification { get; set; } = 2.0;
+
+        /// <summary>
+        /// 볼륨 증폭 활성화 여부
+        /// </summary>
+        public bool EnableVolumeAmplification { get; set; } = true;
+
+        /// <summary>
+        /// 오디오 클리핑 방지 활성화 여부 (볼륨 증폭 시 신호가 왜곡되는 것을 방지)
+        /// </summary>
+        public bool EnableClippingPrevention { get; set; } = true;
+
+        /// <summary>
+        /// 자동 게인 컨트롤 (AGC) 활성화 여부
+        /// 입력 볼륨에 따라 자동으로 증폭 배율을 조정
+        /// </summary>
+        public bool EnableAutoGainControl { get; set; } = false;
+
+        /// <summary>
+        /// 자동 게인 컨트롤 목표 레벨 (0.0 ~ 1.0)
+        /// AGC가 활성화된 경우 이 레벨을 유지하도록 자동 조정
+        /// </summary>
+        public double AutoGainTargetLevel { get; set; } = 0.5;
+
+        /// <summary>
         /// 노이즈 감소 활성화 여부
         /// </summary>
         public bool EnableNoiseReduction { get; set; } = true;
@@ -215,7 +243,9 @@ namespace VoiceMacroPro.Models
         /// </summary>
         public string SettingsSummary =>
             $"{SampleRate}Hz, {BitsPerSample}bit, {Channels}ch, {BufferMilliseconds}ms 버퍼" +
-            $"{(UseWindowsDefaultMicrophone ? " (윈도우 기본 마이크)" : $" (장치 {DeviceNumber})")}";
+            $"{(UseWindowsDefaultMicrophone ? " (윈도우 기본 마이크)" : $" (장치 {DeviceNumber})")}" +
+            $"{(EnableVolumeAmplification ? $", 볼륨 증폭: {VolumeAmplification:F1}x" : "")}" +
+            $"{(EnableAutoGainControl ? $", AGC 활성화 (목표: {AutoGainTargetLevel:F1})" : "")}";
 
         /// <summary>
         /// GPT-4o에 최적화된 기본 설정으로 초기화
@@ -229,8 +259,28 @@ namespace VoiceMacroPro.Models
             UseWindowsDefaultMicrophone = true;  // 윈도우 기본 마이크 사용
             DeviceNumber = -1;            // 시스템 기본 장치
             MicrophoneSensitivity = 0.8;  // 적절한 감도 설정
+            VolumeAmplification = 2.0;    // 기본 2배 증폭
+            EnableVolumeAmplification = true;   // 볼륨 증폭 활성화
+            EnableClippingPrevention = true;    // 클리핑 방지 활성화
+            EnableAutoGainControl = false;      // AGC는 기본적으로 비활성화
+            AutoGainTargetLevel = 0.5;    // AGC 목표 레벨
             EnableNoiseReduction = true;  // 노이즈 감소 활성화
             EnableVoiceActivityDetection = true;  // VAD 활성화
+        }
+
+        /// <summary>
+        /// 볼륨 증폭 설정을 안전한 범위로 검증하고 조정
+        /// </summary>
+        public void ValidateAndAdjustAmplificationSettings()
+        {
+            // 볼륨 증폭 배율을 안전한 범위로 제한
+            VolumeAmplification = Math.Max(0.1, Math.Min(5.0, VolumeAmplification));
+            
+            // AGC 목표 레벨을 유효한 범위로 제한
+            AutoGainTargetLevel = Math.Max(0.1, Math.Min(0.9, AutoGainTargetLevel));
+            
+            // 마이크 감도를 유효한 범위로 제한
+            MicrophoneSensitivity = Math.Max(0.0, Math.Min(1.0, MicrophoneSensitivity));
         }
     }
 
