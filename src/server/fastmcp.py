@@ -7,6 +7,12 @@ import json
 import logging
 from datetime import datetime
 
+class MCPConfig(BaseModel):
+    """MCP 서버 설정 모델"""
+    logLevel: str = "info"
+    allowedOrigins: List[str] = ["*"]
+    maxConnections: int = 100
+
 class MCPContext(BaseModel):
     """MCP 컨텍스트 모델"""
     session_id: str
@@ -17,18 +23,23 @@ class MCPContext(BaseModel):
 
 class FastMCP:
     """FastMCP 서버 기본 클래스"""
-    def __init__(self):
+    def __init__(self, config: Optional[MCPConfig] = None):
+        self.config = config or MCPConfig()
         self.app = FastAPI(title="MSL MCP Server")
         self.active_connections: Dict[str, WebSocket] = {}
         self.contexts: Dict[str, MCPContext] = {}
         
+        # 로깅 설정
+        logging.basicConfig(level=getattr(logging, self.config.logLevel.upper()))
+        self.logger = logging.getLogger("FastMCP")
+        
         # CORS 설정
         self.app.add_middleware(
             CORSMiddleware,
-            allow_origins=["*"],
+            allow_origins=self.config.allowedOrigins,
             allow_credentials=True,
             allow_methods=["*"],
-            allow_headers=["*"]
+            allow_headers=["*"],
         )
         
         # 기본 라우트 설정
@@ -38,24 +49,26 @@ class FastMCP:
         """기본 라우트 설정"""
         @self.app.get("/health")
         async def health_check():
-            return {"status": "ok", "timestamp": datetime.now().isoformat()}
-        
-        @self.app.websocket("/ws/{session_id}")
-        async def websocket_endpoint(websocket: WebSocket, session_id: str):
-            await self.connect(websocket, session_id)
-            try:
-                while True:
-                    data = await websocket.receive_json()
-                    await self.handle_websocket_message(websocket, session_id, data)
-            except WebSocketDisconnect:
-                await self.disconnect(session_id)
+            return {"status": "healthy"}
+            
+        @self.app.get("/config")
+        async def get_config():
+            return self.config.dict()
     
+    def get_app(self):
+        """FastAPI 앱 인스턴스 반환"""
+        return self.app
+        
     async def connect(self, websocket: WebSocket, session_id: str):
         """WebSocket 연결 처리"""
+        if len(self.active_connections) >= self.config.maxConnections:
+            await websocket.close(code=1013)  # Try again later
+            return
+            
         await websocket.accept()
         self.active_connections[session_id] = websocket
         self.contexts[session_id] = MCPContext(session_id=session_id)
-    
+        
     async def disconnect(self, session_id: str):
         """WebSocket 연결 해제 처리"""
         if session_id in self.active_connections:
@@ -105,8 +118,4 @@ class FastMCP:
                 "message": message
             },
             "id": request_id
-        })
-    
-    def get_app(self) -> FastAPI:
-        """FastAPI 앱 반환"""
-        return self.app 
+        }) 
